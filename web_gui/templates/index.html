@@ -1,0 +1,56 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-IDS Dashboard (Flask Version)</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+        body { background-color: #0a0a0a; color: #00ff00; font-family: 'Courier New', monospace; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        header { border-bottom: 1px solid #00ff00; padding-bottom: 20px; margin-bottom: 20px; }
+        h1 { margin: 0; }
+        .card { background: #111; border: 1px solid #333; padding: 20px; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 10px; border-bottom: 1px solid #333; }
+        th { color: #00ff00; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI-Powered Intrusion Detection System</h1>
+            <p>Status: Active | Monitoring Network Traffic</p>
+        </header>
+        
+        <div class="card">
+            <h2>Live Traffic Monitor</h2>
+            <div id="traffic-log">
+                Loading traffic logs...
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Attack Statistics</h2>
+            <p>Total Packets: <span id="total-packets">0</span></p>
+            <p>Threats Detected: <span id="threats-detected">0</span></p>
+        </div>
+    </div>
+    <script>
+        // Simple script to fetch logs
+        fetch('/api/traffic-log')
+            .then(response => response.json())
+            .then(data => {
+                const logDiv = document.getElementById('traffic-log');
+                let html = '<table><thead><tr><th>Src IP</th><th>Dst IP</th><th>Protocol</th><th>Info</th></tr></thead><tbody>';
+                data.forEach(log => {
+                    html += `<tr><td>${log.src_ip}</td><td>${log.dst_ip}</td><td>${log.protocol}</td><td>${log.info}</td></tr>`;
+                });
+                html += '</tbody></table>';
+                logDiv.innerHTML = html;
+                document.getElementById('total-packets').innerText = data.length;
+            });
+    </script>
+</body>
+</html>
