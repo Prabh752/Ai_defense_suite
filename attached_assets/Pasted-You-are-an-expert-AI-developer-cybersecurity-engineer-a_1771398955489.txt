@@ -1,0 +1,191 @@
+You are an expert AI developer, cybersecurity engineer, and full-stack web developer.
+
+Create a COMPLETE college-level project titled:
+
+# ⭐ AI-Powered Intrusion Detection System (IDS)
+
+====================================================
+🎯 PROJECT DESCRIPTION
+Build an intelligent IDS system capable of monitoring network traffic and detecting cyber-attacks using:
+- Random Forest
+- Autoencoders
+- LSTM models
+
+The system MUST include:
+✔ Real-time attack detection  
+✔ ML-based anomaly detection  
+✔ GUI-based Website Interface  
+✔ Streamlit Dashboard  
+✔ Full backend + frontend structure  
+
+====================================================
+🛠️ FULL PROJECT REQUIREMENTS
+
+I need a COMPLETE, SUBMISSION-READY PROJECT containing:
+
+====================================================
+1️⃣ ROOT FOLDER STRUCTURE
+Create a clean, professional folder structure:
+
+AI_IDS_Project/
+│── data/
+│   ├── raw/
+│   ├── processed/
+│── models/
+│── notebooks/
+│── logs/
+│── results/
+│── src/
+│   ├── preprocessing/
+│   ├── training/
+│   ├── detection/
+│   ├── simulation/
+│   ├── dashboard/
+│   ├── api/
+│   ├── utils/
+│── web_gui/
+│   ├── templates/
+│   ├── static/
+│   ├── app.py   (Flask GUI)
+│   ├── styles.css
+│   ├── dashboard_embed.html
+│── tests/
+│── configs/
+│── requirements.txt
+│── README.md
+│── main.py
+
+For each folder:
+- Include file descriptions
+- Provide Python example codes inside key files
+
+====================================================
+2️⃣ DETAILED README.md (Professional Grade)
+Your README.md must include:
+
+## Project Title  
+## Abstract  
+## Objective  
+## Problem Statement  
+## Key Features  
+## System Architecture Diagram (ASCII + MermaidJS)  
+## IDS Workflow Diagram  
+## Folder Structure  
+## Tech Stack  
+## Why ML for IDS?  
+## Dataset Info  
+   - NSL-KDD  
+   - UNSW-NB15  
+## ML Algorithms Used  
+   - Random Forest  
+   - Autoencoder  
+   - LSTM  
+## Model Training Process  
+## Evaluation Metrics  
+## GUI Overview  
+## Streamlit Dashboard Overview  
+## Installation Steps  
+## How to Run  
+## Sample Screenshots (placeholder text)  
+## Future Scope  
+## Conclusion  
+
+====================================================
+3️⃣ MACHINE LEARNING IMPLEMENTATION (with Code)
+
+Provide Python code for:
+
+### ✔ Data Preprocessing  
+### ✔ Feature Engineering  
+### ✔ Random Forest Training  
+### ✔ Autoencoder Training  
+### ✔ LSTM Training  
+### ✔ Attack Classification  
+### ✔ Anomaly Detection  
+### ✔ Real-time Prediction Engine  
+### ✔ Evaluation (accuracy, precision, recall, F1-score)
+
+Explain every ML technique clearly.
+
+====================================================
+4️⃣ ATTACK DETECTION MODULES
+
+Include explanation + code for detecting:
+- DDoS attacks  
+- Port Scanning  
+- Brute-force login attempts  
+
+Also add a **traffic simulation module** that generates synthetic attack traffic.
+
+====================================================
+5️⃣ STREAMLIT DASHBOARD (Interactive)
+
+Provide a complete dashboard code with:
+- Traffic graphs  
+- Attack alerts  
+- Anomaly score charts  
+- Log viewer  
+- Model prediction outputs  
+- Attack history timeline  
+
+====================================================
+6️⃣ GUI-BASED WEBSITE INTERFACE (FLASK)
+
+Add a **full GUI website** with:
+
+### Frontend:
+- HTML templates (index.html, results.html)
+- CSS file (styles.css)
+- JavaScript for dynamic updates
+
+### Backend:
+- Flask server (app.py)
+- API endpoints:
+  - /predict
+  - /traffic-log
+  - /attack-summary
+- Integration with ML models
+- Real-time attack visualization
+
+GUI Pages include:
+- Homepage  
+- Live Traffic Monitor  
+- Attack Detection Dashboard  
+- System Logs  
+- Embedded Streamlit Panel  
+
+====================================================
+7️⃣ NETWORKING EXPLANATION
+
+Add clear explanations for:
+- Packet structure (TCP/UDP/IP)
+- Packet features used in detection
+- Why ML is needed in IDS
+- Anomaly-based vs signature-based detection
+
+====================================================
+8️⃣ FINAL DELIVERABLES
+
+Your output MUST contain:
+
+✔ Complete folder tree  
+✔ All Python scripts  
+✔ HTML, CSS & JS files  
+✔ Flask GUI  
+✔ Streamlit Dashboard  
+✔ README.md (professional)  
+✔ ML models sample code  
+✔ Diagrams  
+✔ Clear explanations  
+
+====================================================
+⚠️ IMPORTANT  
+Write the output as a FINAL, polished, complete submission-ready project.  
+Do NOT ask questions.  
+Do NOT leave TODOs.  
+Do NOT skip code files.  
+Do NOT simplify content.  
+
+====================================================
+
+Generate the full project now.
