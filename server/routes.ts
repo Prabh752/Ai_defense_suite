@@ -1,6 +1,7 @@
 
 import type { Express } from "express";
 import type { Server } from "http";
+import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
@@ -14,10 +15,33 @@ const openai = new OpenAI({
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
 
+// === WebSocket Broadcast Utility ===
+let wss: WebSocketServer;
+
+export function broadcast(payload: object) {
+  if (!wss) return;
+  const msg = JSON.stringify(payload);
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(msg);
+    }
+  });
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // === WebSocket Server Setup ===
+  wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+
+  wss.on("connection", (ws) => {
+    ws.send(JSON.stringify({ type: "connected", clientCount: wss.clients.size }));
+
+    ws.on("error", () => {});
+    ws.on("close", () => {});
+  });
 
   // === Traffic Endpoints ===
   
@@ -30,8 +54,7 @@ export async function registerRoutes(
 
   app.get(api.traffic.stats.path, async (req, res) => {
     const stats = await storage.getTrafficStats();
-    // Calculate a mock throughput for demo purposes
-    const throughput = Math.floor(Math.random() * 1000) + 500; // 500-1500 Mbps
+    const throughput = Math.floor(Math.random() * 1000) + 500;
     res.json({ ...stats, throughput });
   });
 
@@ -39,6 +62,19 @@ export async function registerRoutes(
     try {
       const input = api.traffic.log.input.parse(req.body);
       const log = await storage.createTrafficLog(input);
+      // Broadcast to WebSocket clients
+      broadcast({ type: "traffic_event", data: log });
+      if (log.isAnomaly) {
+        broadcast({
+          type: "alert",
+          data: {
+            id: String(log.id),
+            attackType: log.attackType || "Unknown",
+            sourceIp: log.sourceIp,
+            severity: (log.confidenceScore || 0) > 0.85 ? "high" : (log.confidenceScore || 0) > 0.5 ? "medium" : "low",
+          },
+        });
+      }
       res.status(201).json(log);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -55,7 +91,6 @@ export async function registerRoutes(
 
   app.get(api.models.list.path, async (req, res) => {
     const models = await storage.getMlModels();
-    // If no models exist, seed them (in memory fallback behavior handled by DB seed usually)
     res.json(models);
   });
 
@@ -66,12 +101,12 @@ export async function registerRoutes(
       return res.status(404).json({ message: "Model not found" });
     }
 
-    // Simulate training process
     await storage.updateMlModelStatus(id, "training");
-    
-    // In a real app, this would trigger a Python script
+    broadcast({ type: "model_status", data: { id, status: "training" } });
+
     setTimeout(async () => {
-      await storage.updateMlModelStatus(id, "active");
+      const updated = await storage.updateMlModelStatus(id, "active");
+      broadcast({ type: "model_status", data: { id, status: "active", accuracy: updated.accuracy } });
     }, 5000);
 
     res.json({ status: "success", message: `Training started for ${model.name}` });
@@ -81,22 +116,20 @@ export async function registerRoutes(
 
   app.post(api.simulation.start.path, async (req, res) => {
     const input = api.simulation.start.input.parse(req.body);
-    
-    // Start a background interval to generate fake traffic matching the simulation parameters
     const jobId = randomBytes(4).toString("hex");
-    
+
     console.log(`Starting simulation: ${input.attackType} for ${input.durationSeconds}s`);
-    
+
     let elapsed = 0;
     const interval = setInterval(async () => {
       if (elapsed >= input.durationSeconds) {
         clearInterval(interval);
+        broadcast({ type: "simulation_complete", data: { jobId, attackType: input.attackType } });
         return;
       }
-      
-      // Generate packet
+
       const isAttack = input.attackType !== "normal";
-      await storage.createTrafficLog({
+      const log = await storage.createTrafficLog({
         sourceIp: isAttack ? `192.168.1.${Math.floor(Math.random() * 255)}` : "10.0.0.5",
         destinationIp: "10.0.0.1",
         protocol: Math.random() > 0.5 ? "TCP" : "UDP",
@@ -107,8 +140,22 @@ export async function registerRoutes(
         confidenceScore: isAttack ? 0.8 + Math.random() * 0.2 : 0.1,
       });
 
+      // Broadcast live traffic event
+      broadcast({ type: "traffic_event", data: log });
+      if (log.isAnomaly) {
+        broadcast({
+          type: "alert",
+          data: {
+            id: String(log.id),
+            attackType: log.attackType || "Unknown",
+            sourceIp: log.sourceIp,
+            severity: (log.confidenceScore || 0) > 0.85 ? "high" : "medium",
+          },
+        });
+      }
+
       elapsed += 1;
-    }, 1000); // 1 packet per second for demo
+    }, 1000);
 
     res.json({ message: "Simulation started", jobId });
   });
@@ -126,7 +173,6 @@ export async function registerRoutes(
     try {
       const { question } = req.body;
 
-      // Gather current system context
       const [trafficStats, recentLogs, models, systemStatsList] = await Promise.all([
         storage.getTrafficStats(),
         storage.getTrafficLogs(20),
@@ -172,7 +218,6 @@ ${anomalyLogs.length > 0 ? anomalyLogs.map(l =>
 
 Format your response with clear sections using markdown headings. Be concise and technical.`;
 
-      // Stream the AI response
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
@@ -207,10 +252,10 @@ Format your response with clear sections using markdown headings. Be concise and
     }
   });
 
-  // === Seed Data (Run on startup if empty) ===
+  // === Seed Data ===
   await seedDatabase();
 
-  // === Background system stats simulator ===
+  // === Background system stats simulator (broadcasts via WS) ===
   startSystemStatsSimulator();
 
   return httpServer;
@@ -219,12 +264,13 @@ Format your response with clear sections using markdown headings. Be concise and
 function startSystemStatsSimulator() {
   setInterval(async () => {
     try {
-      await storage.createSystemStat({
+      const stat = await storage.createSystemStat({
         cpuUsage: 20 + Math.random() * 60,
         memoryUsage: 40 + Math.random() * 30,
         networkThroughput: 500 + Math.random() * 1000,
         activeConnections: Math.floor(50 + Math.random() * 200),
       });
+      broadcast({ type: "system_stats", data: stat });
     } catch (_) {}
   }, 5000);
 }
@@ -232,27 +278,12 @@ function startSystemStatsSimulator() {
 async function seedDatabase() {
   const models = await storage.getMlModels();
   if (models.length === 0) {
-    // Seed Models
-    /* 
-      The user requested: 
-      - Random Forest
-      - Autoencoder
-      - LSTM
-    */
-    // Use raw query for seeding if create method is strictly typed to exclude ID
-    // But here we just use the storage method
-    // Note: Drizzle's insert values doesn't usually take ID if serial, but we aren't passing ID
-    
-    // We need to bypass the storage interface for seeding to simple insert
-    // Or just rely on the fact that storage.createMlModel doesn't exist yet, let's add it or just use db direct
-    
     await db.insert(schema.mlModels).values([
       { name: "Random Forest Classifier", type: "Classification", accuracy: 0.98, status: "active", lastTrained: new Date() },
       { name: "Deep Autoencoder", type: "Anomaly Detection", accuracy: 0.95, status: "active", lastTrained: new Date() },
       { name: "LSTM Network", type: "Sequence Analysis", accuracy: 0.92, status: "active", lastTrained: new Date() },
     ]);
 
-    // Seed some initial traffic
     await storage.createTrafficLog({
       sourceIp: "192.168.1.105",
       destinationIp: "10.0.0.1",
@@ -261,9 +292,9 @@ async function seedDatabase() {
       info: "Normal HTTP Request",
       isAnomaly: false,
       attackType: "Normal",
-      confidenceScore: 0.05
+      confidenceScore: 0.05,
     });
-    
+
     await storage.createTrafficLog({
       sourceIp: "45.33.22.11",
       destinationIp: "10.0.0.1",
@@ -272,7 +303,7 @@ async function seedDatabase() {
       info: "SYN Scan Detected",
       isAnomaly: true,
       attackType: "Port Scan",
-      confidenceScore: 0.98
+      confidenceScore: 0.98,
     });
   }
 }
