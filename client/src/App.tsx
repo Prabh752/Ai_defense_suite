@@ -10,6 +10,7 @@ import LiveTraffic from "@/pages/LiveTraffic";
 import Simulation from "@/pages/Simulation";
 import Models from "@/pages/Models";
 import SystemHealth from "@/pages/SystemHealth";
+import AISuggestions from "@/pages/AISuggestions";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -28,6 +29,7 @@ function Router() {
             <Route path="/simulation" component={Simulation} />
             <Route path="/models" component={Models} />
             <Route path="/system" component={SystemHealth} />
+            <Route path="/ai-advisor" component={AISuggestions} />
             <Route component={NotFound} />
           </Switch>
         </div>

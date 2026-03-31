@@ -7,6 +7,12 @@ import { z } from "zod";
 import { randomBytes } from "crypto";
 import { db } from "./db";
 import * as schema from "@shared/schema";
+import OpenAI from "openai";
+
+const openai = new OpenAI({
+  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+});
 
 export async function registerRoutes(
   httpServer: Server,
@@ -114,10 +120,113 @@ export async function registerRoutes(
     res.json(stats);
   });
 
+  // === AI Suggestions Endpoint ===
+
+  app.post("/api/ai/suggestions", async (req, res) => {
+    try {
+      const { question } = req.body;
+
+      // Gather current system context
+      const [trafficStats, recentLogs, models, systemStatsList] = await Promise.all([
+        storage.getTrafficStats(),
+        storage.getTrafficLogs(20),
+        storage.getMlModels(),
+        storage.getSystemStats(5),
+      ]);
+
+      const latestStats = systemStatsList[0];
+      const anomalyLogs = recentLogs.filter(l => l.isAnomaly).slice(0, 8);
+      const attackDist = trafficStats.attackTypesDistribution;
+
+      const systemContext = `
+You are an expert cybersecurity AI analyst for a Network Intrusion Detection System (NIDS) called NIDS_PRO.
+Your job is to analyze real-time network data and provide actionable security recommendations.
+
+CURRENT SYSTEM STATE:
+- Total Packets Analyzed: ${trafficStats.totalPackets}
+- Anomalies/Threats Detected: ${trafficStats.anomaliesDetected}
+- Threat Rate: ${trafficStats.totalPackets > 0 ? ((trafficStats.anomaliesDetected / trafficStats.totalPackets) * 100).toFixed(2) : 0}%
+- Attack Type Distribution: ${JSON.stringify(attackDist)}
+${latestStats ? `- CPU Usage: ${latestStats.cpuUsage?.toFixed(1)}%
+- Memory Usage: ${latestStats.memoryUsage?.toFixed(1)}%
+- Network Throughput: ${latestStats.networkThroughput?.toFixed(0)} Mbps
+- Active Connections: ${latestStats.activeConnections}` : ''}
+
+ML MODELS STATUS:
+${models.map(m => `- ${m.name} (${m.type}): ${m.status}, Accuracy: ${((m.accuracy || 0) * 100).toFixed(1)}%`).join('\n')}
+
+RECENT THREAT EVENTS (last 8 anomalies):
+${anomalyLogs.length > 0 ? anomalyLogs.map(l =>
+  `- [${l.attackType}] Source: ${l.sourceIp} → ${l.destinationIp} | Protocol: ${l.protocol} | Confidence: ${((l.confidenceScore || 0) * 100).toFixed(0)}%`
+).join('\n') : '- No recent anomalies detected'}
+      `.trim();
+
+      const userPrompt = question
+        ? `Based on the system state above, please answer this specific question and provide relevant security recommendations:\n\n${question}`
+        : `Based on the system state above, provide a comprehensive security analysis with:
+1. Threat Assessment - current risk level and main concerns
+2. Immediate Actions - what should be done right now (if any threats)
+3. Security Recommendations - 3-5 specific, actionable improvements
+4. ML Model Insights - suggestions for improving detection accuracy
+5. Network Hardening Tips - preventive measures tailored to the observed traffic patterns
+
+Format your response with clear sections using markdown headings. Be concise and technical.`;
+
+      // Stream the AI response
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const stream = await openai.chat.completions.create({
+        model: "gpt-5.1",
+        messages: [
+          { role: "system", content: systemContext },
+          { role: "user", content: userPrompt },
+        ],
+        stream: true,
+        max_completion_tokens: 8192,
+      });
+
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content || "";
+        if (content) {
+          res.write(`data: ${JSON.stringify({ content })}\n\n`);
+        }
+      }
+
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
+    } catch (err) {
+      console.error("AI suggestions error:", err);
+      if (res.headersSent) {
+        res.write(`data: ${JSON.stringify({ error: "AI analysis failed. Please try again." })}\n\n`);
+        res.end();
+      } else {
+        res.status(500).json({ message: "AI suggestions failed" });
+      }
+    }
+  });
+
   // === Seed Data (Run on startup if empty) ===
   await seedDatabase();
 
+  // === Background system stats simulator ===
+  startSystemStatsSimulator();
+
   return httpServer;
+}
+
+function startSystemStatsSimulator() {
+  setInterval(async () => {
+    try {
+      await storage.createSystemStat({
+        cpuUsage: 20 + Math.random() * 60,
+        memoryUsage: 40 + Math.random() * 30,
+        networkThroughput: 500 + Math.random() * 1000,
+        activeConnections: Math.floor(50 + Math.random() * 200),
+      });
+    } catch (_) {}
+  }, 5000);
 }
 
 async function seedDatabase() {

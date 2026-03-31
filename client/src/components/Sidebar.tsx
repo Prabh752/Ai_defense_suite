@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Activity, ShieldAlert, Cpu, Network } from "lucide-react";
+import { LayoutDashboard, Activity, ShieldAlert, Cpu, Network, Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const items = [
@@ -8,6 +8,7 @@ const items = [
   { href: "/simulation", label: "Attack Sim", icon: ShieldAlert },
   { href: "/models", label: "ML Models", icon: Cpu },
   { href: "/system", label: "System Health", icon: Activity },
+  { href: "/ai-advisor", label: "AI Advisor", icon: Brain, badge: "AI" },
 ];
 
 export function Sidebar() {
@@ -40,6 +41,11 @@ export function Sidebar() {
               >
                 <item.icon className={cn("w-5 h-5", isActive && "text-primary")} />
                 {item.label}
+                {"badge" in item && item.badge && (
+                  <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold rounded bg-primary/20 text-primary border border-primary/30 leading-none">
+                    {item.badge}
+                  </span>
+                )}
                 {isActive && (
                   <div className="ml-auto w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
                 )}
