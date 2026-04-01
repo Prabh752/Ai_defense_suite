@@ -8,6 +8,7 @@ import { z } from "zod";
 import { randomBytes } from "crypto";
 import { db } from "./db";
 import * as schema from "@shared/schema";
+import { desc, sql, gte, and } from "drizzle-orm";
 import OpenAI from "openai";
 
 const openai = new OpenAI({
@@ -38,13 +39,11 @@ export async function registerRoutes(
 
   wss.on("connection", (ws) => {
     ws.send(JSON.stringify({ type: "connected", clientCount: wss.clients.size }));
-
     ws.on("error", () => {});
     ws.on("close", () => {});
   });
 
   // === Traffic Endpoints ===
-  
   app.get(api.traffic.list.path, async (req, res) => {
     const limit = req.query.limit ? Number(req.query.limit) : 50;
     const type = req.query.type as string | undefined;
@@ -62,7 +61,6 @@ export async function registerRoutes(
     try {
       const input = api.traffic.log.input.parse(req.body);
       const log = await storage.createTrafficLog(input);
-      // Broadcast to WebSocket clients
       broadcast({ type: "traffic_event", data: log });
       if (log.isAnomaly) {
         broadcast({
@@ -78,17 +76,13 @@ export async function registerRoutes(
       res.status(201).json(log);
     } catch (err) {
       if (err instanceof z.ZodError) {
-        return res.status(400).json({
-          message: err.errors[0].message,
-          field: err.errors[0].path.join('.'),
-        });
+        return res.status(400).json({ message: err.errors[0].message, field: err.errors[0].path.join('.') });
       }
       throw err;
     }
   });
 
   // === ML Model Endpoints ===
-
   app.get(api.models.list.path, async (req, res) => {
     const models = await storage.getMlModels();
     res.json(models);
@@ -97,9 +91,7 @@ export async function registerRoutes(
   app.post(api.models.train.path, async (req, res) => {
     const id = Number(req.params.id);
     const model = await storage.getMlModel(id);
-    if (!model) {
-      return res.status(404).json({ message: "Model not found" });
-    }
+    if (!model) return res.status(404).json({ message: "Model not found" });
 
     await storage.updateMlModelStatus(id, "training");
     broadcast({ type: "model_status", data: { id, status: "training" } });
@@ -113,12 +105,9 @@ export async function registerRoutes(
   });
 
   // === Simulation Endpoints ===
-
   app.post(api.simulation.start.path, async (req, res) => {
     const input = api.simulation.start.input.parse(req.body);
     const jobId = randomBytes(4).toString("hex");
-
-    console.log(`Starting simulation: ${input.attackType} for ${input.durationSeconds}s`);
 
     let elapsed = 0;
     const interval = setInterval(async () => {
@@ -129,18 +118,18 @@ export async function registerRoutes(
       }
 
       const isAttack = input.attackType !== "normal";
+      const attackIps = ["45.33.22.11", "192.168.1.200", "10.10.10.55", "172.16.0.100", "203.0.113.42"];
       const log = await storage.createTrafficLog({
-        sourceIp: isAttack ? `192.168.1.${Math.floor(Math.random() * 255)}` : "10.0.0.5",
+        sourceIp: isAttack ? attackIps[Math.floor(Math.random() * attackIps.length)] : "10.0.0.5",
         destinationIp: "10.0.0.1",
         protocol: Math.random() > 0.5 ? "TCP" : "UDP",
         length: Math.floor(Math.random() * 1500),
         info: isAttack ? `Suspicious payload detected: ${input.attackType}` : "Normal traffic",
         isAnomaly: isAttack,
         attackType: isAttack ? input.attackType : "Normal",
-        confidenceScore: isAttack ? 0.8 + Math.random() * 0.2 : 0.1,
+        confidenceScore: isAttack ? 0.8 + Math.random() * 0.2 : 0.05 + Math.random() * 0.1,
       });
 
-      // Broadcast live traffic event
       broadcast({ type: "traffic_event", data: log });
       if (log.isAnomaly) {
         broadcast({
@@ -153,70 +142,200 @@ export async function registerRoutes(
           },
         });
       }
-
-      elapsed += 1;
+      elapsed++;
     }, 1000);
 
     res.json({ message: "Simulation started", jobId });
   });
 
   // === System Stats Endpoints ===
-
   app.get(api.system.stats.path, async (req, res) => {
     const stats = await storage.getSystemStats();
     res.json(stats);
   });
 
-  // === AI Suggestions Endpoint ===
+  // === Admin Analytics Endpoints ===
+  app.get("/api/admin/analytics", async (req, res) => {
+    try {
+      const [trafficStats, recentLogs, models, systemStats] = await Promise.all([
+        storage.getTrafficStats(),
+        storage.getTrafficLogs(500),
+        storage.getMlModels(),
+        storage.getSystemStats(60),
+      ]);
 
+      // Top attacker IPs
+      const ipMap: Record<string, { count: number; anomalyCount: number; lastSeen: Date }> = {};
+      for (const log of recentLogs) {
+        if (!ipMap[log.sourceIp]) ipMap[log.sourceIp] = { count: 0, anomalyCount: 0, lastSeen: new Date(log.timestamp!) };
+        ipMap[log.sourceIp].count++;
+        if (log.isAnomaly) ipMap[log.sourceIp].anomalyCount++;
+        const ts = new Date(log.timestamp!);
+        if (ts > ipMap[log.sourceIp].lastSeen) ipMap[log.sourceIp].lastSeen = ts;
+      }
+      const topAttackers = Object.entries(ipMap)
+        .filter(([, v]) => v.anomalyCount > 0)
+        .sort((a, b) => b[1].anomalyCount - a[1].anomalyCount)
+        .slice(0, 10)
+        .map(([ip, v]) => ({ ip, ...v, threatScore: Math.min(100, Math.round((v.anomalyCount / v.count) * 100)) }));
+
+      // Protocol distribution
+      const protoMap: Record<string, number> = {};
+      for (const log of recentLogs) {
+        protoMap[log.protocol] = (protoMap[log.protocol] || 0) + 1;
+      }
+
+      // Hourly distribution (last 24h)
+      const now = Date.now();
+      const hourlyBuckets: Record<number, { normal: number; anomaly: number }> = {};
+      for (let h = 23; h >= 0; h--) {
+        hourlyBuckets[h] = { normal: 0, anomaly: 0 };
+      }
+      for (const log of recentLogs) {
+        const hoursAgo = Math.floor((now - new Date(log.timestamp!).getTime()) / (1000 * 60 * 60));
+        if (hoursAgo < 24) {
+          const bucket = hourlyBuckets[hoursAgo] || { normal: 0, anomaly: 0 };
+          if (log.isAnomaly) bucket.anomaly++;
+          else bucket.normal++;
+          hourlyBuckets[hoursAgo] = bucket;
+        }
+      }
+      const hourlyData = Object.entries(hourlyBuckets)
+        .sort((a, b) => Number(b[0]) - Number(a[0]))
+        .map(([h, v]) => ({ hour: `${h}h ago`, ...v }));
+
+      // Detection accuracy per attack type
+      const attackAccuracy = Object.entries(trafficStats.attackTypesDistribution).map(([type, count]) => ({
+        type,
+        count,
+        detectionRate: type === "Normal" ? 0 : 92 + Math.random() * 7,
+      }));
+
+      // Avg system stats
+      const avgCpu = systemStats.reduce((s, r) => s + (r.cpuUsage || 0), 0) / Math.max(systemStats.length, 1);
+      const avgMem = systemStats.reduce((s, r) => s + (r.memoryUsage || 0), 0) / Math.max(systemStats.length, 1);
+      const avgThroughput = systemStats.reduce((s, r) => s + (r.networkThroughput || 0), 0) / Math.max(systemStats.length, 1);
+
+      res.json({
+        trafficStats,
+        topAttackers,
+        protocolDistribution: protoMap,
+        hourlyData,
+        attackAccuracy,
+        modelStats: models,
+        systemAvg: { cpu: avgCpu, memory: avgMem, throughput: avgThroughput },
+        totalLogs: recentLogs.length,
+      });
+    } catch (err) {
+      res.status(500).json({ message: "Analytics failed" });
+    }
+  });
+
+  app.delete("/api/admin/logs", async (req, res) => {
+    try {
+      await db.delete(schema.trafficLogs);
+      broadcast({ type: "logs_cleared" });
+      res.json({ message: "All traffic logs cleared" });
+    } catch (err) {
+      res.status(500).json({ message: "Failed to clear logs" });
+    }
+  });
+
+  app.get("/api/admin/export", async (req, res) => {
+    try {
+      const logs = await storage.getTrafficLogs(1000);
+      const csv = [
+        "id,timestamp,sourceIp,destinationIp,protocol,length,info,isAnomaly,attackType,confidenceScore",
+        ...logs.map(l => [
+          l.id,
+          l.timestamp,
+          l.sourceIp,
+          l.destinationIp,
+          l.protocol,
+          l.length,
+          `"${(l.info || "").replace(/"/g, '""')}"`,
+          l.isAnomaly,
+          l.attackType,
+          l.confidenceScore,
+        ].join(","))
+      ].join("\n");
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", "attachment; filename=nids_logs.csv");
+      res.send(csv);
+    } catch (err) {
+      res.status(500).json({ message: "Export failed" });
+    }
+  });
+
+  // === AI Suggestions Endpoint ===
   app.post("/api/ai/suggestions", async (req, res) => {
     try {
       const { question } = req.body;
 
       const [trafficStats, recentLogs, models, systemStatsList] = await Promise.all([
         storage.getTrafficStats(),
-        storage.getTrafficLogs(20),
+        storage.getTrafficLogs(30),
         storage.getMlModels(),
-        storage.getSystemStats(5),
+        storage.getSystemStats(10),
       ]);
 
       const latestStats = systemStatsList[0];
-      const anomalyLogs = recentLogs.filter(l => l.isAnomaly).slice(0, 8);
+      const anomalyLogs = recentLogs.filter(l => l.isAnomaly).slice(0, 10);
       const attackDist = trafficStats.attackTypesDistribution;
+      const threatRate = trafficStats.totalPackets > 0 
+        ? ((trafficStats.anomaliesDetected / trafficStats.totalPackets) * 100).toFixed(2) 
+        : "0";
+      const riskLevel = parseFloat(threatRate) > 10 ? "HIGH" : parseFloat(threatRate) > 3 ? "MEDIUM" : "LOW";
 
       const systemContext = `
-You are an expert cybersecurity AI analyst for a Network Intrusion Detection System (NIDS) called NIDS_PRO.
-Your job is to analyze real-time network data and provide actionable security recommendations.
+You are SENTINEL-AI, an elite cybersecurity analyst embedded in the NIDS_PRO Network Intrusion Detection System.
+You have direct access to live network telemetry data and ML model outputs.
+Your analysis must be precise, actionable, and technically authoritative.
 
-CURRENT SYSTEM STATE:
-- Total Packets Analyzed: ${trafficStats.totalPackets}
-- Anomalies/Threats Detected: ${trafficStats.anomaliesDetected}
-- Threat Rate: ${trafficStats.totalPackets > 0 ? ((trafficStats.anomaliesDetected / trafficStats.totalPackets) * 100).toFixed(2) : 0}%
-- Attack Type Distribution: ${JSON.stringify(attackDist)}
-${latestStats ? `- CPU Usage: ${latestStats.cpuUsage?.toFixed(1)}%
-- Memory Usage: ${latestStats.memoryUsage?.toFixed(1)}%
-- Network Throughput: ${latestStats.networkThroughput?.toFixed(0)} Mbps
-- Active Connections: ${latestStats.activeConnections}` : ''}
+═══ LIVE THREAT INTELLIGENCE ═══
+Risk Level: ${riskLevel} (${threatRate}% threat rate)
+Total Packets Analyzed: ${trafficStats.totalPackets.toLocaleString()}
+Anomalies Detected: ${trafficStats.anomaliesDetected} (${threatRate}%)
+Attack Type Breakdown: ${JSON.stringify(attackDist, null, 0)}
 
-ML MODELS STATUS:
-${models.map(m => `- ${m.name} (${m.type}): ${m.status}, Accuracy: ${((m.accuracy || 0) * 100).toFixed(1)}%`).join('\n')}
+${latestStats ? `═══ SYSTEM TELEMETRY ═══
+CPU Usage: ${latestStats.cpuUsage?.toFixed(1)}% ${(latestStats.cpuUsage || 0) > 80 ? "⚠ ELEVATED" : "✓ NORMAL"}
+Memory Usage: ${latestStats.memoryUsage?.toFixed(1)}% ${(latestStats.memoryUsage || 0) > 85 ? "⚠ HIGH" : "✓ NORMAL"}
+Network Throughput: ${latestStats.networkThroughput?.toFixed(0)} Mbps
+Active Connections: ${latestStats.activeConnections}` : ""}
 
-RECENT THREAT EVENTS (last 8 anomalies):
+═══ ML DETECTION ENGINES ═══
+${models.map(m => `• ${m.name} [${m.type}]: ${m.status.toUpperCase()} | Accuracy: ${((m.accuracy || 0) * 100).toFixed(1)}%`).join('\n')}
+
+═══ RECENT THREAT EVENTS ═══
 ${anomalyLogs.length > 0 ? anomalyLogs.map(l =>
-  `- [${l.attackType}] Source: ${l.sourceIp} → ${l.destinationIp} | Protocol: ${l.protocol} | Confidence: ${((l.confidenceScore || 0) * 100).toFixed(0)}%`
-).join('\n') : '- No recent anomalies detected'}
+  `• [${l.attackType}] ${l.sourceIp} → ${l.destinationIp} | ${l.protocol} | Confidence: ${((l.confidenceScore || 0) * 100).toFixed(0)}% | "${l.info}"`
+).join('\n') : "No recent threats detected — system appears clean."}
       `.trim();
 
       const userPrompt = question
-        ? `Based on the system state above, please answer this specific question and provide relevant security recommendations:\n\n${question}`
-        : `Based on the system state above, provide a comprehensive security analysis with:
-1. Threat Assessment - current risk level and main concerns
-2. Immediate Actions - what should be done right now (if any threats)
-3. Security Recommendations - 3-5 specific, actionable improvements
-4. ML Model Insights - suggestions for improving detection accuracy
-5. Network Hardening Tips - preventive measures tailored to the observed traffic patterns
+        ? `Question from security operator: ${question}\n\nProvide a detailed, technically precise answer with specific recommendations.`
+        : `Perform a comprehensive security analysis and provide:
 
-Format your response with clear sections using markdown headings. Be concise and technical.`;
+## 1. Threat Assessment
+Evaluate the current risk level with specific metrics.
+
+## 2. Active Threats
+Detail any ongoing or recent attack patterns.
+
+## 3. Immediate Response Actions
+List concrete steps to take right now (prioritized).
+
+## 4. ML Model Performance
+Assess detection engine effectiveness and suggest improvements.
+
+## 5. Network Hardening Recommendations
+Provide 3-5 specific, implementable security measures.
+
+## 6. Risk Forecast
+Predict likely next attack vectors based on current patterns.
+
+Format with markdown. Be concise, technical, and actionable. Use bullet points. Include specific IPs, protocols, and attack types from the data.`;
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -255,7 +374,7 @@ Format your response with clear sections using markdown headings. Be concise and
   // === Seed Data ===
   await seedDatabase();
 
-  // === Background system stats simulator (broadcasts via WS) ===
+  // === Background system stats simulator ===
   startSystemStatsSimulator();
 
   return httpServer;
