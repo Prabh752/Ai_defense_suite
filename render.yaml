@@ -3,12 +3,10 @@ services:
     name: ai-defense-suite
     env: node
     plan: free
-    buildCommand: npm ci && npm run db:push && npm run build
+    buildCommand: npm ci && npm run build
     startCommand: npm run start
     healthCheckPath: /api/traffic/stats
     envVars:
-      - key: DATABASE_URL
-        sync: false
       - key: AI_INTEGRATIONS_OPENAI_API_KEY
         sync: false
       - key: AI_INTEGRATIONS_OPENAI_BASE_URL

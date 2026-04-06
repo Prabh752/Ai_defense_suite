@@ -6,9 +6,6 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { randomBytes } from "crypto";
-import { db } from "./db";
-import * as schema from "@shared/schema";
-import { desc, sql, gte, and } from "drizzle-orm";
 import OpenAI from "openai";
 
 // === WebSocket Broadcast Utility ===
@@ -372,7 +369,7 @@ export async function registerRoutes(
 
   app.delete("/api/admin/logs", async (req, res) => {
     try {
-      await db.delete(schema.trafficLogs);
+      await storage.clearTrafficLogs();
       broadcast({ type: "logs_cleared" });
       res.json({ message: "All traffic logs cleared" });
     } catch (err) {
@@ -561,11 +558,27 @@ function startSystemStatsSimulator() {
 async function seedDatabase() {
   const models = await storage.getMlModels();
   if (models.length === 0) {
-    await db.insert(schema.mlModels).values([
-      { name: "Random Forest Classifier", type: "Classification", accuracy: 0.98, status: "active", lastTrained: new Date() },
-      { name: "Deep Autoencoder", type: "Anomaly Detection", accuracy: 0.95, status: "active", lastTrained: new Date() },
-      { name: "LSTM Network", type: "Sequence Analysis", accuracy: 0.92, status: "active", lastTrained: new Date() },
-    ]);
+    await storage.createMlModel({
+      name: "Random Forest Classifier",
+      type: "Classification",
+      accuracy: 0.98,
+      status: "active",
+      lastTrained: new Date(),
+    });
+    await storage.createMlModel({
+      name: "Deep Autoencoder",
+      type: "Anomaly Detection",
+      accuracy: 0.95,
+      status: "active",
+      lastTrained: new Date(),
+    });
+    await storage.createMlModel({
+      name: "LSTM Network",
+      type: "Sequence Analysis",
+      accuracy: 0.92,
+      status: "active",
+      lastTrained: new Date(),
+    });
 
     await storage.createTrafficLog({
       sourceIp: "192.168.1.105",
