@@ -11,13 +11,93 @@ import * as schema from "@shared/schema";
 import { desc, sql, gte, and } from "drizzle-orm";
 import OpenAI from "openai";
 
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
-
 // === WebSocket Broadcast Utility ===
 let wss: WebSocketServer;
+let openaiClient: OpenAI | null | undefined;
+
+function getOpenAIClient(): OpenAI | null {
+  if (openaiClient !== undefined) return openaiClient;
+
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+  const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL || process.env.OPENAI_BASE_URL;
+
+  if (!apiKey) {
+    openaiClient = null;
+    return openaiClient;
+  }
+
+  openaiClient = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
+  return openaiClient;
+}
+
+function setSseHeaders(res: any) {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+}
+
+function writeSse(res: any, payload: Record<string, unknown>) {
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function streamTextAsSse(res: any, text: string, chunkSize = 220) {
+  for (let i = 0; i < text.length; i += chunkSize) {
+    writeSse(res, { content: text.slice(i, i + chunkSize) });
+  }
+  writeSse(res, { done: true });
+  res.end();
+}
+
+function buildFallbackChatReply(message: string, context?: string): string {
+  const contextNote = context ? "I considered the supplied context while generating this fallback response." : "";
+  return [
+    "AI service is temporarily unavailable, so this is a local fallback response.",
+    contextNote,
+    `Received: "${message}"`,
+    "Recommended next steps:",
+    "1. Confirm your OpenAI API key is configured.",
+    "2. Re-run the same question once key/service access is restored.",
+    "3. Continue monitoring live traffic, anomalies, and attack-type spikes in the dashboard.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildFallbackSuggestions(params: {
+  question?: string;
+  riskLevel: string;
+  threatRate: string;
+  attackDist: Record<string, number>;
+  anomalyLogs: Array<{ attackType: string | null; sourceIp: string }>;
+}): string {
+  const { question, riskLevel, threatRate, attackDist, anomalyLogs } = params;
+  const topAttack = Object.entries(attackDist).sort((a, b) => b[1] - a[1])[0];
+  const primaryAttack = topAttack ? `${topAttack[0]} (${topAttack[1]} events)` : "No dominant attack type";
+  const suspiciousIps = Array.from(new Set(anomalyLogs.map((l) => l.sourceIp))).slice(0, 5);
+
+  return [
+    "## AI Service Fallback Analysis",
+    "OpenAI is currently unavailable, so this report is generated from local telemetry.",
+    "",
+    "## Threat Assessment",
+    `- Risk Level: ${riskLevel}`,
+    `- Threat Rate: ${threatRate}%`,
+    `- Dominant Pattern: ${primaryAttack}`,
+    "",
+    "## Immediate Response Actions",
+    "- Apply temporary rate limits on high-noise services.",
+    "- Block or challenge repeated malicious source IPs at edge firewall/WAF.",
+    "- Increase logging for affected protocols and preserve evidence for forensics.",
+    "",
+    "## Suspicious Source IPs",
+    suspiciousIps.length > 0 ? suspiciousIps.map((ip) => `- ${ip}`).join("\n") : "- No active anomaly sources in latest sample",
+    "",
+    "## Next Step",
+    question
+      ? `- Re-run your question once AI access is restored: "${question}"`
+      : "- Re-run full analysis once AI access is restored for deeper recommendations.",
+  ].join("\n");
+}
 
 export function broadcast(payload: object) {
   if (!wss) return;
@@ -154,6 +234,65 @@ export async function registerRoutes(
     res.json(stats);
   });
 
+  // === Chatbot API Endpoint ===
+  app.post(api.chatbot.message.path, async (req, res) => {
+    try {
+      const input = api.chatbot.message.input.parse(req.body);
+      const client = getOpenAIClient();
+      if (!client) {
+        return res.json({
+          reply: buildFallbackChatReply(input.message, input.context),
+          model: "local-fallback",
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const systemPrompt = [
+        "You are SENTINEL-AI, a cybersecurity chatbot for an intrusion detection dashboard.",
+        "Provide concise, practical, technically accurate guidance.",
+        "Prioritize actionable response steps and defensive recommendations.",
+      ].join(" ");
+
+      const userMessage = input.context
+        ? `Context:\n${input.context}\n\nUser message:\n${input.message}`
+        : input.message;
+
+      const completion = await client.chat.completions.create({
+        model: "gpt-5.1",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage },
+        ],
+        max_completion_tokens: 1200,
+      });
+
+      const reply = completion.choices[0]?.message?.content?.trim() || "";
+      if (!reply) {
+        return res.status(500).json({ message: "Chatbot returned an empty response" });
+      }
+
+      return res.json({
+        reply,
+        model: "gpt-5.1",
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({
+          message: err.errors[0].message,
+          field: err.errors[0].path.join("."),
+        });
+      }
+
+      console.error("Chatbot API error:", err);
+      return res.json({
+        reply: buildFallbackChatReply(req.body?.message || "No message provided"),
+        model: "local-fallback",
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
+
   // === Admin Analytics Endpoints ===
   app.get("/api/admin/analytics", async (req, res) => {
     try {
@@ -269,6 +408,14 @@ export async function registerRoutes(
 
   // === AI Suggestions Endpoint ===
   app.post("/api/ai/suggestions", async (req, res) => {
+    let fallbackAnalysis = buildFallbackSuggestions({
+      question: req.body?.question,
+      riskLevel: "UNKNOWN",
+      threatRate: "0",
+      attackDist: {},
+      anomalyLogs: [],
+    });
+
     try {
       const { question } = req.body;
 
@@ -286,6 +433,20 @@ export async function registerRoutes(
         ? ((trafficStats.anomaliesDetected / trafficStats.totalPackets) * 100).toFixed(2) 
         : "0";
       const riskLevel = parseFloat(threatRate) > 10 ? "HIGH" : parseFloat(threatRate) > 3 ? "MEDIUM" : "LOW";
+      fallbackAnalysis = buildFallbackSuggestions({
+        question,
+        riskLevel,
+        threatRate,
+        attackDist,
+        anomalyLogs: anomalyLogs.map((l) => ({ attackType: l.attackType, sourceIp: l.sourceIp })),
+      });
+
+      const client = getOpenAIClient();
+      if (!client) {
+        setSseHeaders(res);
+        streamTextAsSse(res, fallbackAnalysis);
+        return;
+      }
 
       const systemContext = `
 You are SENTINEL-AI, an elite cybersecurity analyst embedded in the NIDS_PRO Network Intrusion Detection System.
@@ -337,11 +498,9 @@ Predict likely next attack vectors based on current patterns.
 
 Format with markdown. Be concise, technical, and actionable. Use bullet points. Include specific IPs, protocols, and attack types from the data.`;
 
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
+      setSseHeaders(res);
 
-      const stream = await openai.chat.completions.create({
+      const stream = await client.chat.completions.create({
         model: "gpt-5.1",
         messages: [
           { role: "system", content: systemContext },
@@ -354,19 +513,24 @@ Format with markdown. Be concise, technical, and actionable. Use bullet points. 
       for await (const chunk of stream) {
         const content = chunk.choices[0]?.delta?.content || "";
         if (content) {
-          res.write(`data: ${JSON.stringify({ content })}\n\n`);
+          writeSse(res, { content });
         }
       }
 
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      writeSse(res, { done: true });
       res.end();
     } catch (err) {
       console.error("AI suggestions error:", err);
       if (res.headersSent) {
-        res.write(`data: ${JSON.stringify({ error: "AI analysis failed. Please try again." })}\n\n`);
+        writeSse(res, {
+          content:
+            "\n\n---\nAI stream failed mid-response. Continuing with locally generated fallback guidance.",
+        });
+        writeSse(res, { done: true });
         res.end();
       } else {
-        res.status(500).json({ message: "AI suggestions failed" });
+        setSseHeaders(res);
+        streamTextAsSse(res, fallbackAnalysis);
       }
     }
   });

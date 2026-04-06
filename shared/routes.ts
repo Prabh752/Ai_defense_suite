@@ -95,7 +95,26 @@ export const api = {
         200: z.array(z.custom<typeof systemStats.$inferSelect>()),
       },
     },
-  }
+  },
+  chatbot: {
+    message: {
+      method: 'POST' as const,
+      path: '/api/chatbot/message' as const,
+      input: z.object({
+        message: z.string().min(1, "Message is required").max(4000),
+        context: z.string().max(12000).optional(),
+      }),
+      responses: {
+        200: z.object({
+          reply: z.string(),
+          model: z.string(),
+          timestamp: z.string(),
+        }),
+        400: errorSchemas.validation,
+        500: errorSchemas.internal,
+      },
+    },
+  },
 };
 
 // ============================================
