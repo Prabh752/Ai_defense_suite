@@ -1,8 +1,15 @@
 services:
   - type: web
-    name: ai-defense-suite-web-gui
-    env: python
+    name: ai-defense-suite
+    env: node
     plan: free
-    buildCommand: pip install -r requirements-render.txt
-    startCommand: gunicorn web_gui.app:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120
-    healthCheckPath: /
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/traffic/stats
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: AI_INTEGRATIONS_OPENAI_API_KEY
+        sync: false
+      - key: AI_INTEGRATIONS_OPENAI_BASE_URL
+        sync: false
