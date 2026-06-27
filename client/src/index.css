@@ -72,9 +72,28 @@ rgba(255,255,255,.01)
   * {
     @apply border-border;
   }
-  body {
-    @apply bg-background text-foreground antialiased font-sans selection:bg-primary/20 selection:text-primary;
-  }
+    body {
+  @apply bg-background text-foreground antialiased font-sans;
+
+  min-height: 100vh;
+  min-height: 100dvh;
+
+  overflow-x: hidden;
+
+  scroll-behavior: smooth;
+
+  text-rendering: optimizeLegibility;
+
+  -webkit-font-smoothing: antialiased;
+
+  -moz-osx-font-smoothing: grayscale;
+
+  selection-bg-color: hsl(var(--primary));
+
+  transition:
+    background-color .3s ease,
+    color .3s ease;
+}
   
   /* Cyberpunk Scrollbar */
   ::-webkit-scrollbar {
