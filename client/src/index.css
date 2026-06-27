@@ -39,6 +39,33 @@
   /* Custom Fonts */
   --font-sans: 'Inter', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
+  --header-height: 72px;
+  --sidebar-width: 280px;
+  --sidebar-collapsed-width: 82px;
+
+  --container-max: 1440px;
+
+  --shadow-sm: 0 2px 8px rgba(0,0,0,.15);
+  --shadow-md: 0 10px 30px rgba(0,0,0,.30);
+  --shadow-lg: 0 20px 60px rgba(0,0,0,.45);
+
+  --transition-fast: .18s ease;
+  --transition-normal: .28s ease;
+  --transition-slow: .45s ease;
+
+  --gradient-primary: linear-gradient(
+  135deg,
+  hsl(var(--primary)),
+  hsl(var(--accent))
+  );
+
+--gradient-card: linear-gradient(
+180deg,
+rgba(255,255,255,.04),
+rgba(255,255,255,.01)
+);
+
+--glass-bg: rgba(255,255,255,.04);
 }
 
 @layer base {
